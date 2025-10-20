@@ -303,7 +303,7 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"👋 *Welcome {member.first_name}!*\n\n"
                 f"📢 Help us grow this community by inviting your friends!\n"
                 f"✨ Add members and compete on the leaderboard!",
-                reply_markup=reply_markup,
+                # reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
 
@@ -534,5 +534,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
