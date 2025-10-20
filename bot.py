@@ -346,7 +346,7 @@ async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     user = await context.bot.get_chat(user_id)
                     name = user.first_name
                 except:
-                    name = "Unknown User"
+                    name = user_id
             
             medal = medals[i] if i < 3 else f"{i+1}."
             leaderboard_text += f"{medal} {name}: *{count}* invite(s)\n"
@@ -388,7 +388,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         for i, (user_id, data) in enumerate(sorted_inviters):
             count = data.get("invite_count", 0)
-            name = data.get("user_name", "Unknown User")
+            name = data.get("user_name", user_id)
             
             medal = medals[i] if i < 3 else f"{i+1}."
             leaderboard_text += f"{medal} {name}: *{count}* invite(s)\n"
@@ -444,7 +444,7 @@ async def group_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat = update.effective_chat
     
     # If in a group, show that group's stats
-    if chat.type in ["group", "supergroup"]:
+    if chat.type in ["private"]:
         groups = get_all_groups_from_db()
         if chat.id not in groups:
             await update.message.reply_text("❌ This group is not registered. Use /register_group first.")
@@ -534,4 +534,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
