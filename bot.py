@@ -9,7 +9,7 @@ from telegram.ext import (
 )
 from firebase_admin import firestore, initialize_app, credentials
 from datetime import datetime
-
+import os
 # -------------------------------
 # 🔥 Firebase Initialization
 # -------------------------------
@@ -195,3 +195,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
