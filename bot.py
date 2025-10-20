@@ -2,7 +2,7 @@ import logging
 import asyncio
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -99,6 +99,21 @@ def save_inviter_stats_to_db(group_id: int, user_id: int, count: int, user_name:
         logger.error(f"Error saving inviter stats: {e}")
 
 
+def log_member_join(group_id: int, user_id: int, invited_by: int = None) -> None:
+    """Log each member join event with timestamp"""
+    try:
+        ref = db.collection("groups").document(str(group_id)).collection("member_joins").document()
+        ref.set({
+            "user_id": user_id,
+            "invited_by": invited_by,
+            "joined_at": datetime.utcnow(),
+            "is_invited": invited_by is not None
+        })
+        logger.info(f"Member join logged: Group {group_id}, User {user_id}, Invited by {invited_by}")
+    except Exception as e:
+        logger.error(f"Error logging member join: {e}")
+
+
 def get_inviter_stats_from_db(group_id: int) -> dict:
     """Retrieve inviter statistics for a group from Firestore"""
     try:
@@ -107,6 +122,47 @@ def get_inviter_stats_from_db(group_id: int) -> dict:
     except Exception as e:
         logger.error(f"Error fetching inviter stats for group {group_id}: {e}")
         return {}
+
+
+def get_group_statistics(group_id: int) -> dict:
+    """Get comprehensive statistics for a group"""
+    try:
+        now = datetime.utcnow()
+        seven_days_ago = now - timedelta(days=7)
+        
+        # Get all member joins
+        joins_ref = db.collection("groups").document(str(group_id)).collection("member_joins")
+        all_joins = list(joins_ref.stream())
+        
+        # Calculate statistics
+        total_members = len(all_joins)
+        total_invited = sum(1 for doc in all_joins if doc.to_dict().get("is_invited", False))
+        
+        # Last 7 days stats
+        recent_joins = [doc for doc in all_joins if doc.to_dict().get("joined_at", datetime.min) >= seven_days_ago]
+        joined_last_7 = len(recent_joins)
+        invited_last_7 = sum(1 for doc in recent_joins if doc.to_dict().get("is_invited", False))
+        
+        # Active inviters (invited at least 1 person)
+        inviter_stats = get_inviter_stats_from_db(group_id)
+        active_inviters = len([uid for uid, data in inviter_stats.items() if data.get("invite_count", 0) > 0])
+        
+        return {
+            "total_members": total_members,
+            "total_invited": total_invited,
+            "joined_last_7": joined_last_7,
+            "invited_last_7": invited_last_7,
+            "active_inviters": active_inviters
+        }
+    except Exception as e:
+        logger.error(f"Error getting group statistics: {e}")
+        return {
+            "total_members": 0,
+            "total_invited": 0,
+            "joined_last_7": 0,
+            "invited_last_7": 0,
+            "active_inviters": 0
+        }
 
 
 def increment_inviter_count(group_id: int, user_id: int, user_name: str = None) -> int:
@@ -156,7 +212,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /register\\_group \\- Register this group \\(Group admins only\\)\n"
         "• /leaderboard \\- View top inviters\n"
         "• /mystats \\- View your invite statistics\n"
-        "• /groupstats \\- View all group statistics \\(DM only\\)\n\n"
+        "• /groupstats \\- View group statistics\n\n"
         "Just add me to your group and make me an admin\\! 🚀"
     )
     await update.message.reply_text(welcome_text, parse_mode="MarkdownV2")
@@ -222,6 +278,7 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             try:
                 new_count = increment_inviter_count(chat_id, inviter_id, inviter_name)
+                log_member_join(chat_id, member.id, invited_by=inviter_id)
                 
                 keyboard = [[InlineKeyboardButton("🏆 View Leaderboard", callback_data=f"leaderboard_{chat_id}")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -237,6 +294,8 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 logger.error(f"Error handling new member: {e}")
         else:
             # User joined via link
+            log_member_join(chat_id, member.id, invited_by=None)
+            
             keyboard = [[InlineKeyboardButton("🏆 View Leaderboard", callback_data=f"leaderboard_{chat_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -381,9 +440,33 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def group_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show statistics for all groups (DM only)"""
-    if update.effective_chat.type != "private":
-        await update.message.reply_text("❌ This command only works in private messages.")
+    """Show statistics for current group or all groups"""
+    chat = update.effective_chat
+    
+    # If in a group, show that group's stats
+    if chat.type in ["group", "supergroup"]:
+        groups = get_all_groups_from_db()
+        if chat.id not in groups:
+            await update.message.reply_text("❌ This group is not registered. Use /register_group first.")
+            return
+        
+        group_data = groups[chat.id]
+        stats = get_group_statistics(chat.id)
+        
+        stats_text = f"📊 *Group Stats — {group_data['group_name']}*\n\n"
+        stats_text += f"👥 Total Members Joined: *{stats['total_members']}*\n"
+        stats_text += f"➕ Total Invited Members: *{stats['total_invited']}*\n"
+        stats_text += f"📈 Joined in Last 7 Days: *{stats['joined_last_7']}*\n"
+        stats_text += f"🏅 Invited in Last 7 Days: *{stats['invited_last_7']}*\n"
+        stats_text += f"🏆 Active Inviters: *{stats['active_inviters']}*\n"
+        stats_text += f"💬 Messages Monitored: *Coming Soon!*"
+        
+        await update.message.reply_text(stats_text, parse_mode="Markdown")
+        return
+    
+    # If in DM, show all groups statistics
+    if chat.type != "private":
+        await update.message.reply_text("❌ This command works in groups or private messages.")
         return
     
     groups = get_all_groups_from_db()
@@ -396,14 +479,12 @@ async def group_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     
     for group_id, group_data in groups.items():
         group_name = group_data["group_name"]
-        inviter_stats = get_inviter_stats_from_db(group_id)
-        
-        total_inviters = len(inviter_stats)
-        total_invites = sum(data.get("invite_count", 0) for data in inviter_stats.values())
+        stats = get_group_statistics(group_id)
         
         stats_text += f"*{group_name}*\n"
-        stats_text += f"  👥 Inviters: {total_inviters}\n"
-        stats_text += f"  📊 Total Invites: {total_invites}\n\n"
+        stats_text += f"  👥 Members: {stats['total_members']}\n"
+        stats_text += f"  ➕ Invited: {stats['total_invited']}\n"
+        stats_text += f"  🏆 Inviters: {stats['active_inviters']}\n\n"
     
     await update.message.reply_text(stats_text, parse_mode="Markdown")
 
