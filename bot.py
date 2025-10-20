@@ -210,10 +210,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*Available Commands:*\n"
         "• /start \\- Show this message\n"
         "• /register\\_group \\- Register this group \\(Group admins only\\)\n"
-        "• /leaderboard \\- View top inviters\n"
-        "• /mystats \\- View your invite statistics\n"
-        "• /groupstats \\- View group statistics\n\n"
-        "Just add me to your group and make me an admin\\! 🚀"
+        # "• /leaderboard \\- View top inviters\n"
+        # "• /mystats \\- View your invite statistics\n"
+        # "• /groupstats \\- View group statistics\n\n"
+        "\n**Just add me to your group and make me an admin**\\! 🚀"
     )
     await update.message.reply_text(welcome_text, parse_mode="MarkdownV2")
 
@@ -534,3 +534,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
