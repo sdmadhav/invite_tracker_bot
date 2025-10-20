@@ -9,7 +9,9 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
+from datetime import datetime, timedelta
 
+group_meta = defaultdict(lambda: {"joined": [], "added": []})
 # ==================== CONFIG ==================== #
 
 DATA_FILE = "inviter_stats.json"
@@ -358,4 +360,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
