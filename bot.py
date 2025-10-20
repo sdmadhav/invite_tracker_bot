@@ -32,29 +32,30 @@ initialized_groups = set()
 # ==================== STORAGE UTILS ==================== #
 
 def save_stats():
-    """Save inviter stats to disk."""
     data = {
         "stats": {str(k): dict(v) for k, v in group_stats.items()},
-        "names": group_names
+        "names": group_names,
+        "meta": group_meta
     }
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
-    logger.info("Inviter stats saved.")
 
 def load_stats():
-    """Load inviter stats from disk."""
     try:
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
             stats = data.get("stats", {})
             names = data.get("names", {})
+            meta = data.get("meta", {})
             for group_id, users in stats.items():
                 group_stats[int(group_id)] = defaultdict(int, {int(k): v for k, v in users.items()})
             for gid, gname in names.items():
                 group_names[int(gid)] = gname
-        logger.info("Inviter stats loaded successfully.")
+            for gid, meta_data in meta.items():
+                group_meta[int(gid)] = meta_data
     except FileNotFoundError:
         logger.warning("No inviter stats file found; starting fresh.")
+
 
 # ==================== COMMAND HANDLERS ==================== #
 
@@ -146,12 +147,14 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     for member in new_members:
         if member.is_bot:
-            continue
-
+                continue
+        joined_time = datetime.utcnow().isoformat()
+        group_meta[chat_id]["joined"].append(joined_time)
         inviter_id = message.from_user.id if message.from_user.id != member.id else None
         inviter_name = message.from_user.first_name if inviter_id else None
 
         if inviter_id:
+            group_meta[chat_id]["added"].append(joined_time)
             group_stats[chat_id][inviter_id] += 1
             save_stats()
             keyboard = [[InlineKeyboardButton("🏆 View Leaderboard", callback_data=f"leaderboard_{chat_id}")]]
@@ -258,6 +261,68 @@ async def close_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await query.message.delete()
 
+# ================= Stats ==================== #
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show list of groups to choose stats from."""
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("ℹ️ Use /stats in private chat.")
+        return
+
+    if not group_names:
+        await update.message.reply_text("📊 No group data found.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(name, callback_data=f"stats_{gid}")]
+        for gid, name in group_names.items()
+    ]
+    keyboard.append([InlineKeyboardButton("« Close", callback_data="close")])
+    await update.message.reply_text("📍 Select a group to view stats:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def show_group_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show detailed group stats."""
+    query = update.callback_query
+    await query.answer()
+    gid = int(query.data.split("_")[1])
+
+    meta = group_meta.get(gid, {"joined": [], "added": []})
+    total_joined = len(meta["joined"])
+    total_added = len(meta["added"])
+
+    # New in last 7 days
+    now = datetime.utcnow()
+    joined_7d = sum(1 for j in meta["joined"] if datetime.fromisoformat(j) > now - timedelta(days=7))
+    added_7d = sum(1 for a in meta["added"] if datetime.fromisoformat(a) > now - timedelta(days=7))
+
+    # Group summary
+    stats_text = (
+        f"📊 **Group Stats — {group_names.get(gid, 'Unknown Group')}**\n\n"
+        f"👥 Total Members Joined: {total_joined}\n"
+        f"➕ Total Invited Members: {total_added}\n"
+        f"📈 Joined in Last 7 Days: {joined_7d}\n"
+        f"🏅 Invited in Last 7 Days: {added_7d}\n"
+        f"🏆 Active Inviters: {len(group_stats[gid])}\n"
+        f"💬 Messages Monitored: Coming Soon!\n"
+    )
+
+    keyboard = [[InlineKeyboardButton("« Back", callback_data="stats_back")]]
+    await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def stats_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Return to group list."""
+    query = update.callback_query
+    await query.answer()
+    keyboard = [
+        [InlineKeyboardButton(name, callback_data=f"stats_{gid}")]
+        for gid, name in group_names.items()
+    ]
+    keyboard.append([InlineKeyboardButton("« Close", callback_data="close")])
+    await query.edit_message_text("📍 Select a group to view stats:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
 # ==================== MAIN ENTRY ==================== #
 
 def main():
@@ -283,9 +348,14 @@ def main():
     app.add_handler(CallbackQueryHandler(private_leaderboard_view, pattern="^priv_lb_"))
     app.add_handler(CallbackQueryHandler(private_leaderboard_back, pattern="^priv_lb_back$"))
     app.add_handler(CallbackQueryHandler(close_message, pattern="^close$"))
+    # stats
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CallbackQueryHandler(show_group_stats, pattern="^stats_"))
+    app.add_handler(CallbackQueryHandler(stats_back, pattern="^stats_back$"))
 
     logger.info("🤖 Bot is running with polling...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
+
