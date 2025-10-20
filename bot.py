@@ -20,7 +20,7 @@ if firebase_json:
     cred_dict = json.loads(firebase_json)
     cred = credentials.Certificate(cred_dict)
 else:
-    cred = credentials.Certificate("firebase_key.json") 
+    print("Variable not found")
 
 try:
     initialize_app(cred)
@@ -195,4 +195,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
