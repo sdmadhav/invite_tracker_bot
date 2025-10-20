@@ -149,17 +149,17 @@ def increment_inviter_count(group_id: int, user_id: int, user_name: str = None) 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command"""
     welcome_text = (
-        "👋 *Welcome to the Inviter Tracking Bot!*\n\n"
-        "I help track who invites members to groups and maintain leaderboards.\n\n"
+        "👋 *Welcome to the Inviter Tracking Bot\\!*\n\n"
+        "I help track who invites members to groups and maintain leaderboards\\.\n\n"
         "*Available Commands:*\n"
-        "• /start - Show this message\n"
-        "• /register_group - Register this group (Group admins only)\n"
-        "• /leaderboard - View top inviters\n"
-        "• /mystats - View your invite statistics\n"
-        "• /groupstats - View all group statistics (DM only)\n\n"
-        "Just add me to your group and make me an admin! 🚀"
+        "• /start \\- Show this message\n"
+        "• /register\\_group \\- Register this group \\(Group admins only\\)\n"
+        "• /leaderboard \\- View top inviters\n"
+        "• /mystats \\- View your invite statistics\n"
+        "• /groupstats \\- View all group statistics \\(DM only\\)\n\n"
+        "Just add me to your group and make me an admin\\! 🚀"
     )
-    await update.message.reply_text(welcome_text, parse_mode="Markdown")
+    await update.message.reply_text(welcome_text, parse_mode="MarkdownV2")
 
 
 async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
