@@ -10,6 +10,7 @@ from telegram.ext import (
 from firebase_admin import firestore, initialize_app, credentials
 from datetime import datetime
 import os
+import json
 # -------------------------------
 # 🔥 Firebase Initialization
 # -------------------------------
@@ -177,9 +178,10 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 🧠 Main Function
 # -------------------------------
 def main():
+    token = os.environ.get('BOT_TOKEN')
     app = (
         ApplicationBuilder()
-        .token("YOUR_TELEGRAM_BOT_TOKEN")
+        .token(token)
         .build()
     )
 
@@ -195,5 +197,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
