@@ -42,6 +42,12 @@ else:
 db = firestore.client()
 
 # -------------------------------
+# ⚙️ Configuration
+# -------------------------------
+REQUIRED_INVITES = 3  # Number of people a user must invite to message
+CHECK_INVITE_REQUIREMENT = True  # Set to False to disable this feature
+
+# -------------------------------
 # ⚡ Logging Configuration
 # -------------------------------
 logging.basicConfig(
@@ -62,7 +68,9 @@ def save_group_to_db(group_id: int, group_name: str) -> None:
                 "group_name": group_name,
                 "group_id": group_id,
                 "added_on": datetime.utcnow(),
-                "last_updated": datetime.utcnow()
+                "last_updated": datetime.utcnow(),
+                "invite_requirement_enabled": True,
+                "required_invites": REQUIRED_INVITES
             },
             merge=True,
         )
@@ -80,6 +88,18 @@ def get_all_groups_from_db() -> dict:
     except Exception as e:
         logger.error(f"Error fetching groups: {e}")
         return {}
+
+
+def get_group_settings(group_id: int) -> dict:
+    """Get group settings including invite requirements"""
+    try:
+        doc = db.collection("groups").document(str(group_id)).get()
+        if doc.exists:
+            return doc.to_dict()
+        return {"invite_requirement_enabled": True, "required_invites": REQUIRED_INVITES}
+    except Exception as e:
+        logger.error(f"Error getting group settings: {e}")
+        return {"invite_requirement_enabled": True, "required_invites": REQUIRED_INVITES}
 
 
 def save_inviter_stats_to_db(group_id: int, user_id: int, count: int, user_name: str = None) -> None:
@@ -122,6 +142,38 @@ def get_inviter_stats_from_db(group_id: int) -> dict:
     except Exception as e:
         logger.error(f"Error fetching inviter stats for group {group_id}: {e}")
         return {}
+
+
+def get_user_invite_count(group_id: int, user_id: int) -> int:
+    """Get the number of people a user has invited to a group"""
+    try:
+        doc = db.collection("groups").document(str(group_id)).collection("inviters").document(str(user_id)).get()
+        if doc.exists:
+            return doc.to_dict().get("invite_count", 0)
+        return 0
+    except Exception as e:
+        logger.error(f"Error getting user invite count: {e}")
+        return 0
+
+
+def can_user_message(group_id: int, user_id: int) -> tuple[bool, int, int]:
+    """
+    Check if user has invited enough people to message
+    Returns: (can_message, current_invites, required_invites)
+    """
+    try:
+        settings = get_group_settings(group_id)
+        
+        if not settings.get("invite_requirement_enabled", True):
+            return True, 0, 0
+        
+        required = settings.get("required_invites", REQUIRED_INVITES)
+        current = get_user_invite_count(group_id, user_id)
+        
+        return current >= required, current, required
+    except Exception as e:
+        logger.error(f"Error checking user message permission: {e}")
+        return True, 0, 0  # Default to allowing messages on error
 
 
 def get_group_statistics(group_id: int) -> dict:
@@ -210,10 +262,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*Available Commands:*\n"
         "• /start \\- Show this message\n"
         "• /register\\_group \\- Register this group \\(Group admins only\\)\n"
-        # "• /leaderboard \\- View top inviters\n"
-        # "• /mystats \\- View your invite statistics\n"
-        # "• /groupstats \\- View group statistics\n\n"
-        "\n**Just add me to your group and make me an admin**\\! 🚀"
+        "• /leaderboard \\- View top inviters\n"
+        "• /mystats \\- View your invite statistics\n"
+        "• /groupstats \\- View group statistics\n"
+        "• /setrequirement \\<number\\> \\- Set invite requirement \\(Admins only\\)\n\n"
+        "⚠️ *Note:* To message in groups, you must invite the required number of friends first\\!\n\n"
+        "**Just add me to your group and make me an admin**\\! 🚀"
     )
     await update.message.reply_text(welcome_text, parse_mode="MarkdownV2")
 
@@ -246,12 +300,71 @@ async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"✅ *Group Registered Successfully!*\n\n"
             f"📊 Group: {group_name}\n"
             f"🆔 ID: `{group_id}`\n\n"
-            f"I'll now track all new member invites!",
+            f"⚠️ *Invite Requirement:* Members must invite {REQUIRED_INVITES} friends to message in this group.\n\n"
+            f"Use /setrequirement to change this number.",
             parse_mode="Markdown"
         )
     except Exception as e:
         logger.error(f"Error registering group: {e}")
         await update.message.reply_text("❌ Error registering group. Please try again.")
+
+
+async def set_requirement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the invite requirement for a group (admin only)"""
+    chat = update.effective_chat
+    
+    if chat.type not in ["group", "supergroup"]:
+        await update.message.reply_text("❌ This command only works in groups.")
+        return
+    
+    # Check if user is admin
+    try:
+        member = await context.bot.get_chat_member(chat.id, update.effective_user.id)
+        if member.status not in ["creator", "administrator"]:
+            await update.message.reply_text("❌ Only group administrators can change settings.")
+            return
+    except Exception as e:
+        logger.error(f"Error checking admin status: {e}")
+        return
+    
+    # Parse the number
+    if not context.args or len(context.args) != 1:
+        await update.message.reply_text(
+            "❌ Usage: /setrequirement <number>\n\n"
+            "Example: /setrequirement 5\n"
+            "Set to 0 to disable invite requirement."
+        )
+        return
+    
+    try:
+        required_invites = int(context.args[0])
+        if required_invites < 0:
+            await update.message.reply_text("❌ Number must be 0 or positive.")
+            return
+        
+        # Update in database
+        db.collection("groups").document(str(chat.id)).update({
+            "required_invites": required_invites,
+            "invite_requirement_enabled": required_invites > 0
+        })
+        
+        if required_invites == 0:
+            await update.message.reply_text(
+                "✅ *Invite requirement disabled!*\n\n"
+                "All members can now message freely.",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                f"✅ *Invite requirement updated!*\n\n"
+                f"Members must now invite *{required_invites}* friend(s) to message in this group.",
+                parse_mode="Markdown"
+            )
+    except ValueError:
+        await update.message.reply_text("❌ Please provide a valid number.")
+    except Exception as e:
+        logger.error(f"Error setting requirement: {e}")
+        await update.message.reply_text("❌ Error updating settings.")
 
 
 async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -280,12 +393,23 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 new_count = increment_inviter_count(chat_id, inviter_id, inviter_name)
                 log_member_join(chat_id, member.id, invited_by=inviter_id)
                 
+                settings = get_group_settings(chat_id)
+                required = settings.get("required_invites", REQUIRED_INVITES)
+                
                 keyboard = [[InlineKeyboardButton("🏆 View Leaderboard", callback_data=f"leaderboard_{chat_id}")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                # Check if user can now message
+                if new_count >= required:
+                    status_msg = f"🎉 You can now message in this group!"
+                else:
+                    remaining = required - new_count
+                    status_msg = f"📝 Invite {remaining} more friend(s) to message in the group."
                 
                 await message.reply_text(
                     f"🎉 *Thank you {inviter_name} for adding {member.first_name}!*\n\n"
                     f"📊 You've invited *{new_count}* member(s) to the group.\n"
+                    f"{status_msg}\n"
                     f"Keep inviting friends! 🚀",
                     reply_markup=reply_markup,
                     parse_mode="Markdown"
@@ -296,16 +420,70 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # User joined via link
             log_member_join(chat_id, member.id, invited_by=None)
             
-            keyboard = [[InlineKeyboardButton("🏆 View Leaderboard", callback_data=f"leaderboard_{chat_id}")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            settings = get_group_settings(chat_id)
+            required = settings.get("required_invites", REQUIRED_INVITES)
             
-            await message.reply_text(
-                f"👋 *Welcome {member.first_name}!*\n\n"
-                f"📢 Help us grow this community by inviting your friends!\n"
-                f"✨ Add members and compete on the leaderboard!",
-                # reply_markup=reply_markup,
+            if required > 0:
+                await message.reply_text(
+                    f"👋 *Welcome {member.first_name}!*\n\n"
+                    f"⚠️ To message in this group, you must invite *{required}* friend(s) first.\n\n"
+                    f"📢 Add your friends to unlock messaging privileges!",
+                    parse_mode="Markdown"
+                )
+            else:
+                await message.reply_text(
+                    f"👋 *Welcome {member.first_name}!*\n\n"
+                    f"📢 Help us grow this community by inviting your friends!",
+                    parse_mode="Markdown"
+                )
+
+
+async def check_message_permission(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check if user can message and delete message if they can't"""
+    message = update.message
+    chat_id = message.chat_id
+    user_id = message.from_user.id
+    
+    # Skip for admins and bot
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status in ["creator", "administrator"]:
+            return  # Admins can always message
+    except Exception as e:
+        logger.error(f"Error checking admin status: {e}")
+        return
+    
+    # Check if user has invited enough people
+    can_message, current, required = can_user_message(chat_id, user_id)
+    
+    if not can_message:
+        try:
+            # Delete the message
+            await message.delete()
+            
+            # Calculate remaining invites
+            remaining = required - current
+            
+            # Send notification
+            notification = await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"⚠️ {message.from_user.first_name}, you need to invite *{remaining}* more friend(s) to message in this group.\n\n"
+                    f"📊 Current invites: {current}/{required}\n"
+                    f"💡 Add friends to the group to unlock messaging!"
+                ),
                 parse_mode="Markdown"
             )
+            
+            # Delete notification after 10 seconds
+            await asyncio.sleep(10)
+            try:
+                await notification.delete()
+            except:
+                pass
+                
+        except Exception as e:
+            logger.error(f"Error handling restricted message: {e}")
 
 
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -346,7 +524,7 @@ async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     user = await context.bot.get_chat(user_id)
                     name = user.first_name
                 except:
-                    name = user_id
+                    name = str(user_id)
             
             medal = medals[i] if i < 3 else f"{i+1}."
             leaderboard_text += f"{medal} {name}: *{count}* invite(s)\n"
@@ -388,7 +566,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         for i, (user_id, data) in enumerate(sorted_inviters):
             count = data.get("invite_count", 0)
-            name = data.get("user_name", user_id)
+            name = data.get("user_name", str(user_id))
             
             medal = medals[i] if i < 3 else f"{i+1}."
             leaderboard_text += f"{medal} {name}: *{count}* invite(s)\n"
@@ -428,7 +606,13 @@ async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if user_id in inviter_stats:
             count = inviter_stats[user_id].get("invite_count", 0)
             total_invites += count
-            stats_text += f"• {group_data['group_name']}: *{count}* invite(s)\n"
+            
+            # Check if they can message
+            settings = get_group_settings(group_id)
+            required = settings.get("required_invites", REQUIRED_INVITES)
+            status = "✅" if count >= required else f"❌ ({required - count} more needed)"
+            
+            stats_text += f"• {group_data['group_name']}: *{count}* invite(s) {status}\n"
             found_stats = True
     
     if not found_stats:
@@ -444,7 +628,7 @@ async def group_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat = update.effective_chat
     
     # If in a group, show that group's stats
-    if chat.type in ["private"]:
+    if chat.type in ["group", "supergroup"]:
         groups = get_all_groups_from_db()
         if chat.id not in groups:
             await update.message.reply_text("❌ This group is not registered. Use /register_group first.")
@@ -452,14 +636,20 @@ async def group_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         
         group_data = groups[chat.id]
         stats = get_group_statistics(chat.id)
+        settings = get_group_settings(chat.id)
         
         stats_text = f"📊 *Group Stats — {group_data['group_name']}*\n\n"
         stats_text += f"👥 Total Members Joined: *{stats['total_members']}*\n"
         stats_text += f"➕ Total Invited Members: *{stats['total_invited']}*\n"
         stats_text += f"📈 Joined in Last 7 Days: *{stats['joined_last_7']}*\n"
         stats_text += f"🏅 Invited in Last 7 Days: *{stats['invited_last_7']}*\n"
-        stats_text += f"🏆 Active Inviters: *{stats['active_inviters']}*\n"
-        stats_text += f"💬 Messages Monitored: *Coming Soon!*"
+        stats_text += f"🏆 Active Inviters: *{stats['active_inviters']}*\n\n"
+        
+        required = settings.get("required_invites", REQUIRED_INVITES)
+        if required > 0:
+            stats_text += f"⚠️ Invite Requirement: *{required}* friend(s)"
+        else:
+            stats_text += f"✅ Invite Requirement: *Disabled*"
         
         await update.message.reply_text(stats_text, parse_mode="Markdown")
         return
@@ -519,21 +709,25 @@ def main():
     app.add_handler(CommandHandler("leaderboard", leaderboard_command))
     app.add_handler(CommandHandler("mystats", my_stats))
     app.add_handler(CommandHandler("groupstats", group_stats))
+    app.add_handler(CommandHandler("setrequirement", set_requirement))
     
     # Message handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
+    
+    # Check all regular messages for invite requirement
+    app.add_handler(MessageHandler(
+        filters.ChatType.GROUPS & ~filters.COMMAND & ~filters.StatusUpdate.ALL,
+        check_message_permission
+    ))
     
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(show_leaderboard, pattern="^leaderboard_"))
     app.add_handler(CallbackQueryHandler(close_message, pattern="^close$"))
     
     # Start bot
-    logger.info("🤖 Bot started with Firebase backend...")
+    logger.info("🤖 Bot started with Firebase backend and invite requirements...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
     main()
-
-
-
