@@ -45,7 +45,7 @@ db = firestore.client()
 # ⚙️ Configuration
 # -------------------------------
 REQUIRED_INVITES = 3  # Number of people a user must invite to message
-CHECK_INVITE_REQUIREMENT = True  # Set to False to disable this feature
+CHECK_INVITE_REQUIREMENT = False  # Set to False to disable this feature
 
 # -------------------------------
 # ⚡ Logging Configuration
@@ -731,3 +731,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
